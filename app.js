@@ -5,26 +5,16 @@ var express = require("express");
 var app = express();
 var bodyParser = require("body-parser");
 var request = require("request");
+const moment = require("moment");
 var apiUrl = "http://auctions.sportz.io/";
 let isProd = false;
 var port = isProd ? 9009 : 8082;
 
-/*var server = http.createServer(function(req,res){
-	res.writeHead(200, {'content-type':'text/html'});
-	res.end(fs.readFileSync(__dirname + '/index.html'));
-}).listen(port, function(){
-	console.log('Listening on http://localhost:8080');
-});*/
-
 var server = http.Server(app);
 
 server.listen(port, function () {
-  console.log("Listening on http://localhost:9009");
+  console.log("Listening on http://localhost:" + port);
 });
-
-/*app.get('/',function(req,res){
-	res.sendFile(__dirname + '/public/ttentry.html');
-});*/
 
 app.use(function (req, res, next) {
   res.header("Access-Control-Allow-Origin", "*");
@@ -54,8 +44,18 @@ var minutes = "";
 var seconds = "";
 var count = 0;
 
+let prevData = {};
+let next = true;
+let SameRequest = [];
+let CurrentRequest = "";
+
 app.get("/ping", function (req, res) {
-  res.send("pong");
+  console.log("ping");
+  //res.send("pong");
+  res.send({
+    msg: "Pong",
+    time: moment().format("h:mm:ss a"),
+  });
 });
 app.post("/startTimer", function (req, res) {
   if (clock && clock != "") {
@@ -159,7 +159,6 @@ app.post("/playerReset", function (req, res) {
 app.post("/playerPicked", function (req, res) {
   console.log("Pushing Player picked to socket");
   var dataToUpdate = req.body;
-  //console.log(typeof dataToUpdate,dataToUpdate);
   io.sockets.emit("playerpicked", dataToUpdate);
   res.send({ status: 1 });
 });
@@ -218,6 +217,165 @@ function addLeadingZeros(str, max) {
   return str.length < max ? addLeadingZeros("0" + str, max) : str;
 }
 
-io.sockets.on("playerpicked", function (data) {
-  console.log(data);
+app.post("/bidPlayer", (req, res) => {
+  let data = req.body;
+  let msg = "";
+  console.log(
+    "post request resived ",
+    moment().format("h:mm:ss a"),
+    data.team_id
+  );
+  if (next) {
+    CurrentRequest = data;
+    next = false;
+    getFinalResult(data)
+      .then((result) => {
+        if (result == false) {
+          msg = `player already bid for this amount.`;
+        } else {
+          msg = `Bid Succesfull`;
+        }
+        next = true;
+        res.send({
+          msg: msg,
+          time: moment().format("h:mm:ss a"),
+        });
+      })
+      .catch((error) => console.error(error));
+  } else {
+    if (
+      CurrentRequest.map_id == data.map_id &&
+      CurrentRequest.player_id == data.player_id &&
+      CurrentRequest.bid_amount == data.bid_amount
+    ) {
+      SameRequest.push(data);
+      res.send({
+        msg: `player already bid for this amount.`,
+        time: moment().format("h:mm:ss a"),
+      });
+    }
+  }
 });
+
+/*async function postBid(data) {
+  let msg = "";
+  let response = await new Promise(function (resolve, reject) {
+    console.log(prevData, data);
+    if (
+      data.player_id === prevData.player_id &&
+      data.bid_amount === prevData.bid_amount
+    ) {
+      msg = `player already bid for this amount by team ${prevData.team_id}`;
+      resolve(msg);
+    } else {
+      let postData = {
+        map_id: 20,
+        player_id: data.player_id,
+        round_id: data.round_id,
+        team_id: data.team_id,
+        current_price: data.bid_amount,
+        optype: 1,
+      };
+      let url = apiUrl + `api/Auction/AddDeleteBid`;
+      request.post(
+        url,
+        {
+          json: postData,
+        },
+        (error, res, body) => {
+          if (error) {
+            console.error(error);
+            reject(error);
+          }
+          if (res) {
+            console.log("res: ", body);
+            prevData = data;
+            msg = `Bid Succesfull`;
+            resolve(msg);
+          }
+        }
+      );
+    }
+  });
+  return response;
+}*/
+
+/**
+ * Get final bid status
+ * @param {*} data
+ */
+async function getFinalResult(data) {
+  let response = await getCurrentBid(data);
+  if (response == true) {
+    console.log("Bid start");
+    let bidResponse = await postBid(data);
+    return bidResponse;
+  } else {
+    console.log("Bid Stop");
+    return response;
+  }
+}
+
+/**
+ * Get last Bid details
+ * @param {*} data
+ */
+function getCurrentBid(data) {
+  return new Promise(function (resolve, reject) {
+    request.get(
+      apiUrl + `api/Auction/GetBidDetails?map_id=${data.map_id}`,
+      (error, res, body) => {
+        if (error) {
+          reject(error);
+        }
+        if (body && body.length > 0) {
+          console.log("current bid: ", body);
+          let prevData = JSON.parse(body)[0] ? JSON.parse(body)[0] : {};
+          if (
+            data.player_id == prevData.player_id &&
+            parseInt(data.bid_amount) <= parseInt(prevData.current_price)
+          ) {
+            resolve(false);
+          } else {
+            resolve(true);
+          }
+        } else {
+          resolve(true);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Post Current Bid
+ * @param {*} data
+ */
+function postBid(data) {
+  return new Promise(function (resolve, reject) {
+    let postData = {
+      map_id: data.map_id,
+      player_id: data.player_id,
+      round_id: data.round_id,
+      team_id: data.team_id,
+      current_price: data.bid_amount,
+      optype: 1,
+    };
+    let url = apiUrl + `api/Auction/AddDeleteBid`;
+    request.post(
+      url,
+      {
+        json: postData,
+      },
+      (error, res, body) => {
+        if (error) {
+          console.error(error);
+          reject(error);
+        }
+        if (body) {
+          resolve(true);
+        }
+      }
+    );
+  });
+}
