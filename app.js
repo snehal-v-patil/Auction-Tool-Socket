@@ -6,12 +6,12 @@ var app = express();
 var bodyParser = require("body-parser");
 var request = require("request");
 const moment = require("moment");
+const session = require("express-session");
 var apiUrl = "http://auctions.sportz.io/";
 let isProd = false;
 var port = isProd ? 9009 : 8082;
 
 var server = http.Server(app);
-
 server.listen(port, function () {
   console.log("Listening on http://localhost:" + port);
 });
@@ -34,20 +34,23 @@ app.use(
 app.use(bodyParser.json({ limit: "100mb" }));
 app.use(express.static(__dirname + "/public"));
 
-var io = socketio.listen(server);
-var connectCounter = 0;
-var initScore = "";
+/** Set Express session as middleware */
+app.set("trust proxy", 1); // trust first proxy
+app.use(
+  session({
+    secret: "keyboard cat",
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: true },
+  })
+);
 
+var io = socketio.listen(server);
 var clock = "";
 var timeToSet = "";
 var minutes = "";
 var seconds = "";
 var count = 0;
-
-let prevData = {};
-let next = true;
-let SameRequest = [];
-let CurrentRequest = "";
 
 app.get("/ping", function (req, res) {
   console.log("ping");
@@ -106,8 +109,8 @@ app.post("/resetTimer", function (req, res) {
 });
 
 app.post("/playerBid", function (req, res) {
-  console.log("Pushing Player bid to socket");
   var dataToUpdate = req.body;
+  console.log("Pushing Player bid to socket", dataToUpdate);
   io.sockets.emit("playerBid", dataToUpdate);
   res.send({ status: 1 });
 });
@@ -221,99 +224,59 @@ app.post("/bidPlayer", (req, res) => {
   let data = req.body;
   let msg = "";
   console.log(
-    "post request resived ",
+    "post request: ",
     moment().format("h:mm:ss a"),
-    data.team_id
+    data.team_id,
+    data.player_id
   );
-  if (next) {
-    CurrentRequest = data;
-    next = false;
-    getFinalResult(data)
-      .then((result) => {
-        if (result == false) {
-          msg = `player already bid for this amount.`;
-        } else {
-          msg = `Bid Succesfull`;
-        }
-        next = true;
-        res.send({
-          msg: msg,
-          time: moment().format("h:mm:ss a"),
-        });
-      })
-      .catch((error) => console.error(error));
+
+  if (!req.session[`${data.player_id}`]) {
+    req.session[`${data.player_id}`] = [data];
+    console.log("session:", req.session[`${data.player_id}`]);
+    const poppedData = req.session[`${data.player_id}`].shift();
+    bidPlayer(req, res, poppedData);
   } else {
-    if (
-      CurrentRequest.map_id == data.map_id &&
-      CurrentRequest.player_id == data.player_id &&
-      CurrentRequest.bid_amount == data.bid_amount
-    ) {
-      SameRequest.push(data);
-      res.send({
-        msg: `player already bid for this amount.`,
-        time: moment().format("h:mm:ss a"),
-      });
-    }
+    req.session[`${data.player_id}`].push(data);
+    console.log("session:", req.session[`${data.player_id}`]);
   }
 });
 
-/*async function postBid(data) {
-  let msg = "";
-  let response = await new Promise(function (resolve, reject) {
-    console.log(prevData, data);
-    if (
-      data.player_id === prevData.player_id &&
-      data.bid_amount === prevData.bid_amount
-    ) {
-      msg = `player already bid for this amount by team ${prevData.team_id}`;
-      resolve(msg);
-    } else {
-      let postData = {
-        map_id: 20,
-        player_id: data.player_id,
-        round_id: data.round_id,
-        team_id: data.team_id,
-        current_price: data.bid_amount,
-        optype: 1,
-      };
-      let url = apiUrl + `api/Auction/AddDeleteBid`;
-      request.post(
-        url,
-        {
-          json: postData,
-        },
-        (error, res, body) => {
-          if (error) {
-            console.error(error);
-            reject(error);
-          }
-          if (res) {
-            console.log("res: ", body);
-            prevData = data;
-            msg = `Bid Succesfull`;
-            resolve(msg);
-          }
-        }
-      );
-    }
-  });
-  return response;
-}*/
+function bidPlayer(req, res, data) {
+  getFinalResult(data)
+    .then((result) => {
+      let status;
+      if (result == false) {
+        status = 0;
+        msg = `Other team already bid for this amount.`;
+      } else {
+        status = 1;
+        msg = `Bid Succesfully.`;
+        io.sockets.emit("playerBid", req.body);
+      }
+      res.send({
+        status: status,
+        msg: msg,
+      });
+
+      if (req.session[`${data.player_id}`].length > 0) {
+        const poppedData = req.session[`${data.player_id}`].shift();
+        bidPlayer(req, res, poppedData);
+      } else {
+        //To Do - clear player_id session
+      }
+    })
+    .catch((error) => console.error(error));
+}
 
 /**
  * Get final bid status
  * @param {*} data
  */
 async function getFinalResult(data) {
+  console.log("process for: ", data);
   let response = await getCurrentBid(data);
-  if (response == true) {
-    console.log("Bid start");
-    let bidResponse = await postBid(data);
-    return bidResponse;
-  } else {
-    console.log("Bid Stop");
-    return response;
-  }
+  let bidResponse = response ? await postBid(data) : response;
+  return bidResponse;
 }
 
 /**
@@ -329,12 +292,19 @@ function getCurrentBid(data) {
           reject(error);
         }
         if (body && body.length > 0) {
-          console.log("current bid: ", body);
           let prevData = JSON.parse(body)[0] ? JSON.parse(body)[0] : {};
+
+          console.log(
+            "current bid: ",
+            body,
+            data.player_id == prevData.player_id,
+            parseInt(data.current_price) <= parseInt(prevData.current_price)
+          );
           if (
             data.player_id == prevData.player_id &&
-            parseInt(data.bid_amount) <= parseInt(prevData.current_price)
+            parseInt(data.current_price) <= parseInt(prevData.current_price)
           ) {
+            console.log("Bid Fail", data.team_id);
             resolve(false);
           } else {
             resolve(true);
@@ -352,13 +322,14 @@ function getCurrentBid(data) {
  * @param {*} data
  */
 function postBid(data) {
+  console.log("Bid start ", data.team_id);
   return new Promise(function (resolve, reject) {
     let postData = {
       map_id: data.map_id,
       player_id: data.player_id,
       round_id: data.round_id,
       team_id: data.team_id,
-      current_price: data.bid_amount,
+      current_price: data.current_price,
       optype: 1,
     };
     let url = apiUrl + `api/Auction/AddDeleteBid`;
