@@ -7,6 +7,12 @@ var bodyParser = require("body-parser");
 var request = require("request");
 const moment = require("moment");
 const session = require("express-session");
+const {
+  userJoin,
+  getCurrentUser,
+  userLeave,
+  getRoomUsers,
+} = require("./utils/users");
 var apiUrl = "http://auctions.sportz.io/";
 let isProd = false;
 var port = isProd ? 9009 : 8082;
@@ -52,6 +58,113 @@ var minutes = "";
 var seconds = "";
 var count = 0;
 
+// Run when client connects
+io.on("connection", (socket) => {
+  socket.on("joinRoom", ({ username, room }) => {
+    const user = userJoin(socket.id, username, room);
+    socket.join(user.room);
+    console.log("user join room :", user);
+    // Broadcast when a user connects
+    socket.broadcast
+      .to(user.room)
+      .emit("message", `${user.username} has joined the socket`);
+  });
+
+  // Runs when client disconnects
+  socket.on("disconnect", () => {
+    const user = userLeave(socket.id);
+
+    if (user) {
+      console.log(`${user.username} has left the socket`);
+    }
+  });
+
+  socket.on("startTimer", (data) => {
+    const user = getCurrentUser(socket.id);
+    if (clock && clock != "") {
+      clearInterval(clock);
+    }
+    console.log(data);
+    console.log("Starting timer...");
+    minutes = data.minutes;
+    seconds = data.seconds;
+    clock = setInterval(function () {
+      var currTime = processTimer(minutes, seconds);
+      if (count == 0) {
+        currTime["team_id"] = data.team_id;
+        currTime["team_name"] = data.team_name;
+      }
+
+      socket.broadcast.to(user.room).emit("timerstart", currTime);
+      count++;
+    }, 1000);
+  });
+
+  socket.on("pauseTimer", (data) => {
+    const user = getCurrentUser(socket.id);
+    console.log("Stopping timer...");
+    clearInterval(clock);
+    socket.broadcast.to(user.room).emit("timerpause", timeToSet);
+    count = 0;
+  });
+
+  socket.on("resetTimer", (data) => {
+    const user = getCurrentUser(socket.id);
+    if (clock && clock != "") {
+      clearInterval(clock);
+    }
+    minutes = data.minutes;
+    seconds = data.seconds;
+    minutes = addLeadingZeros(minutes, 2);
+    seconds = addLeadingZeros(seconds, 2);
+    var currTime = { minutes: minutes, seconds: seconds };
+    currTime["team_id"] = data.team_id;
+    currTime["team_name"] = data.team_name;
+    console.log("Reset timer...");
+    socket.broadcast.to(user.room).emit("timerreset", currTime);
+    count = 0;
+  });
+
+  socket.on("setPlayerBid", (data) => {
+    const user = getCurrentUser(socket.id);
+    console.log("Pushing Player bid to socket", data);
+    socket.broadcast.to(user.room).emit("getPlayerBid", data);
+  });
+
+  socket.on("sendPlayerReset", (data) => {
+    const user = getCurrentUser(socket.id);
+    console.log("Player reset called");
+    socket.broadcast.to(user.room).emit("playerreset", data);
+  });
+
+  socket.on("playerDrafted", (data) => {
+    const user = getCurrentUser(socket.id);
+    console.log("Player Darfted called");
+    var dataToUpdate = data;
+    var playerId = dataToUpdate.player_id;
+    var categoryId = dataToUpdate.category_id;
+    var map_id = dataToUpdate.map_id;
+    if (!dataToUpdate["drafted"]) {
+      dataToUpdate["is_sold"] = false;
+    }
+    getPlayerData(playerId, categoryId, map_id).then(function (data) {
+      var tempData = data;
+      var dataToSend = tempData;
+      for (var x in dataToUpdate) {
+        var keyName = x;
+        dataToSend[keyName] = dataToUpdate[keyName];
+      }
+      socket.broadcast.to(user.room).emit("sendPlayerDrafted", dataToSend);
+    });
+  });
+
+  socket.on("playerPicked", (data) => {
+    const user = getCurrentUser(socket.id);
+    console.log("Pushing Player picked to socket");
+    socket.broadcast.to(user.room).emit("SendPlayerpicked", data);
+  });
+});
+
 app.get("/ping", function (req, res) {
   console.log("ping");
   //res.send("pong");
@@ -60,111 +173,104 @@ app.get("/ping", function (req, res) {
     time: moment().format("h:mm:ss a"),
   });
 });
-app.post("/startTimer", function (req, res) {
-  if (clock && clock != "") {
-    clearInterval(clock);
-  }
-  console.log(req.body);
-  //timeToSet = req.body.timerValue;
-  console.log("Starting timer...");
-  minutes = req.body.minutes;
-  seconds = req.body.seconds;
-  clock = setInterval(function () {
-    var currTime = processTimer(minutes, seconds);
-    if (count == 0) {
-      currTime["team_id"] = req.body.team_id;
-      currTime["team_name"] = req.body.team_name;
-    }
+// app.post("/startTimer", function (req, res) {
+//   if (clock && clock != "") {
+//     clearInterval(clock);
+//   }
+//   console.log(req.body);
+//   //timeToSet = req.body.timerValue;
+//   console.log("Starting timer...");
+//   minutes = req.body.minutes;
+//   seconds = req.body.seconds;
+//   clock = setInterval(function () {
+//     var currTime = processTimer(minutes, seconds);
+//     if (count == 0) {
+//       currTime["team_id"] = req.body.team_id;
+//       currTime["team_name"] = req.body.team_name;
+//     }
 
-    io.sockets.emit("timerstart", currTime);
-    console.log(currTime);
-    count++;
-  }, 1000);
-  res.send({ timerstatus: 1 });
-});
+//     io.sockets.emit("timerstart", currTime);
+//     console.log(currTime);
+//     count++;
+//   }, 1000);
+//   res.send({ timerstatus: 1 });
+// });
 
-app.post("/pauseTimer", function (req, res) {
-  console.log("Stopping timer...");
-  clearInterval(clock);
-  io.sockets.emit("timerpause", timeToSet);
-  res.send({ timerstatus: 0 });
-  count = 0;
-});
+// app.post("/pauseTimer", function (req, res) {
+//   console.log("Stopping timer...");
+//   clearInterval(clock);
+//   io.sockets.emit("timerpause", timeToSet);
+//   res.send({ timerstatus: 0 });
+//   count = 0;
+// });
 
-app.post("/resetTimer", function (req, res) {
-  if (clock && clock != "") {
-    clearInterval(clock);
-  }
-  minutes = req.body.minutes;
-  seconds = req.body.seconds;
-  minutes = addLeadingZeros(minutes, 2);
-  seconds = addLeadingZeros(seconds, 2);
-  var currTime = { minutes: minutes, seconds: seconds };
-  currTime["team_id"] = req.body.team_id;
-  currTime["team_name"] = req.body.team_name;
-  console.log("Reset timer...");
-  io.sockets.emit("timerreset", currTime);
-  res.send({ timerstatus: 0 });
-  count = 0;
-});
+// app.post("/resetTimer", function (req, res) {
+//   if (clock && clock != "") {
+//     clearInterval(clock);
+//   }
+//   minutes = req.body.minutes;
+//   seconds = req.body.seconds;
+//   minutes = addLeadingZeros(minutes, 2);
+//   seconds = addLeadingZeros(seconds, 2);
+//   var currTime = { minutes: minutes, seconds: seconds };
+//   currTime["team_id"] = req.body.team_id;
+//   currTime["team_name"] = req.body.team_name;
+//   console.log("Reset timer...");
+//   io.sockets.emit("timerreset", currTime);
+//   res.send({ timerstatus: 0 });
+//   count = 0;
+// });
 
-app.post("/playerBid", function (req, res) {
-  var dataToUpdate = req.body;
-  console.log("Pushing Player bid to socket", dataToUpdate);
-  io.sockets.emit("playerBid", dataToUpdate);
-  res.send({ status: 1 });
-});
+// app.post("/playerDrafted", function (req, res) {
+//   console.log("Pushing to socket", req.body);
+//   var dataToUpdate = req.body;
+//   var playerId = dataToUpdate.player_id;
+//   var categoryId = dataToUpdate.category_id;
+//   var map_id = dataToUpdate.map_id;
+//   if (!dataToUpdate["drafted"]) {
+//     dataToUpdate["is_sold"] = false;
+//   }
+//   getPlayerData(playerId, categoryId, map_id).then(function (data) {
+//     var tempData = data;
+//     if (tempData && tempData != "") {
+//       /*try{
+// 				tempData = JSON.parse(data);
+// 			}
+// 			catch(e){
+// 				console.log(e);
+// 				res.send({"status": "Error occurred in pushing to socket"});
+// 				return;
+// 			}*/
+//       var dataToSend = tempData;
+//       for (var x in dataToUpdate) {
+//         //console.log(x);
+//         var keyName = x;
+//         console.log("to change", dataToUpdate[keyName]);
+//         dataToSend[keyName] = dataToUpdate[keyName];
+//       }
 
-app.post("/playerDrafted", function (req, res) {
-  console.log("Pushing to socket", req.body);
-  var dataToUpdate = req.body;
-  var playerId = dataToUpdate.player_id;
-  var categoryId = dataToUpdate.category_id;
-  var map_id = dataToUpdate.map_id;
-  if (!dataToUpdate["drafted"]) {
-    dataToUpdate["is_sold"] = false;
-  }
-  getPlayerData(playerId, categoryId, map_id).then(function (data) {
-    var tempData = data;
-    if (tempData && tempData != "") {
-      /*try{
-				tempData = JSON.parse(data);
-			}
-			catch(e){
-				console.log(e);
-				res.send({"status": "Error occurred in pushing to socket"});
-				return;
-			}*/
-      var dataToSend = tempData;
-      for (var x in dataToUpdate) {
-        //console.log(x);
-        var keyName = x;
-        console.log("to change", dataToUpdate[keyName]);
-        dataToSend[keyName] = dataToUpdate[keyName];
-      }
+//       console.log("Data sent to client -->", dataToSend);
+//       io.sockets.emit("playerdrafted", dataToSend);
+//       res.send({ status: "Pushed to Socket successfully!" });
+//     } else {
+//       res.send({ status: "Error occurred in pushing to socket" });
+//     }
+//   });
+// });
 
-      console.log("Data sent to client -->", dataToSend);
-      io.sockets.emit("playerdrafted", dataToSend);
-      res.send({ status: "Pushed to Socket successfully!" });
-    } else {
-      res.send({ status: "Error occurred in pushing to socket" });
-    }
-  });
-});
+// app.post("/playerReset", function (req, res) {
+//   console.log("Player reset called");
+//   var dataToUpdate = req.body;
+//   io.sockets.emit("playerreset", dataToUpdate);
+//   res.send({ status: 1 });
+// });
 
-app.post("/playerReset", function (req, res) {
-  console.log("Player reset called");
-  var dataToUpdate = req.body;
-  io.sockets.emit("playerreset", dataToUpdate);
-  res.send({ status: 1 });
-});
-
-app.post("/playerPicked", function (req, res) {
-  console.log("Pushing Player picked to socket");
-  var dataToUpdate = req.body;
-  io.sockets.emit("playerpicked", dataToUpdate);
-  res.send({ status: 1 });
-});
+// app.post("/playerPicked", function (req, res) {
+//   console.log("Pushing Player picked to socket");
+//   var dataToUpdate = req.body;
+//   io.sockets.emit("playerpicked", dataToUpdate);
+//   res.send({ status: 1 });
+// });
 
 function getPlayerData(player_id, category_id, map_id) {
   return new Promise(function (resolve, reject) {
@@ -251,7 +357,7 @@ function bidPlayer(req, res, data) {
       } else {
         status = 1;
         msg = `Bid Succesfully.`;
-        io.sockets.emit("playerBid", req.body);
+        //io.sockets.emit("playerBid", req.body);
       }
       res.send({
         status: status,
