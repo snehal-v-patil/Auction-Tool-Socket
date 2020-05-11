@@ -79,6 +79,7 @@ io.on("connection", (socket) => {
     }
   });
 
+  /** Start Timer */
   socket.on("startTimer", (data) => {
     const user = getCurrentUser(socket.id);
     if (clock && clock != "") {
@@ -94,20 +95,25 @@ io.on("connection", (socket) => {
         currTime["team_id"] = data.team_id;
         currTime["team_name"] = data.team_name;
       }
-
-      socket.broadcast.to(user.room).emit("timerstart", currTime);
+      if (user) {
+        socket.broadcast.to(user.room).emit("timerstart", currTime);
+      }
       count++;
     }, 1000);
   });
 
+  /**Pause Timer */
   socket.on("pauseTimer", (data) => {
     const user = getCurrentUser(socket.id);
     console.log("Stopping timer...");
     clearInterval(clock);
-    socket.broadcast.to(user.room).emit("timerpause", timeToSet);
+    if (user) {
+      socket.broadcast.to(user.room).emit("timerpause", timeToSet);
+    }
     count = 0;
   });
 
+  /**Reset Timer */
   socket.on("resetTimer", (data) => {
     const user = getCurrentUser(socket.id);
     if (clock && clock != "") {
@@ -121,22 +127,31 @@ io.on("connection", (socket) => {
     currTime["team_id"] = data.team_id;
     currTime["team_name"] = data.team_name;
     console.log("Reset timer...");
-    socket.broadcast.to(user.room).emit("timerreset", currTime);
+    if (user) {
+      socket.broadcast.to(user.room).emit("timerreset", currTime);
+    }
     count = 0;
   });
 
+  /**Set player Current Bid */
   socket.on("setPlayerBid", (data) => {
     const user = getCurrentUser(socket.id);
     console.log("Pushing Player bid to socket", data);
-    socket.broadcast.to(user.room).emit("getPlayerBid", data);
+    if (user) {
+      socket.broadcast.to(user.room).emit("getPlayerBid", data);
+    }
   });
 
+  /**Send Player reset */
   socket.on("sendPlayerReset", (data) => {
     const user = getCurrentUser(socket.id);
     console.log("Player reset called");
-    socket.broadcast.to(user.room).emit("playerreset", data);
+    if (user) {
+      socket.broadcast.to(user.room).emit("playerreset", data);
+    }
   });
 
+  /**Player Selected for Auction/Draft */
   socket.on("playerDrafted", (data) => {
     const user = getCurrentUser(socket.id);
     console.log("Player Darfted called");
@@ -154,25 +169,27 @@ io.on("connection", (socket) => {
         var keyName = x;
         dataToSend[keyName] = dataToUpdate[keyName];
       }
-      socket.broadcast.to(user.room).emit("sendPlayerDrafted", dataToSend);
+      if (user) {
+        socket.broadcast.to(user.room).emit("sendPlayerDrafted", dataToSend);
+      }
     });
   });
 
+  /**Player Pick for Darft From Team Dashboard */
   socket.on("playerPicked", (data) => {
     const user = getCurrentUser(socket.id);
     console.log("Pushing Player picked to socket");
-    socket.broadcast.to(user.room).emit("SendPlayerpicked", data);
+    if (user) {
+      socket.broadcast.to(user.room).emit("SendPlayerpicked", data);
+    }
   });
 });
 
 app.get("/ping", function (req, res) {
   console.log("ping");
-  //res.send("pong");
-  res.send({
-    msg: "Pong",
-    time: moment().format("h:mm:ss a"),
-  });
+  res.send({ msg: "Pong" });
 });
+
 // app.post("/startTimer", function (req, res) {
 //   if (clock && clock != "") {
 //     clearInterval(clock);
@@ -272,6 +289,7 @@ app.get("/ping", function (req, res) {
 //   res.send({ status: 1 });
 // });
 
+/**Get Selected Player Data For Auction/Draft */
 function getPlayerData(player_id, category_id, map_id) {
   return new Promise(function (resolve, reject) {
     console.log("Calling API");
@@ -300,6 +318,7 @@ function getPlayerData(player_id, category_id, map_id) {
   });
 }
 
+/**Timer Process */
 function processTimer(min, sec) {
   if (min == 00 && sec == 00) {
     /*do nothing*/
@@ -326,6 +345,7 @@ function addLeadingZeros(str, max) {
   return str.length < max ? addLeadingZeros("0" + str, max) : str;
 }
 
+/**Update Player Bid */
 app.post("/bidPlayer", (req, res) => {
   let data = req.body;
   let msg = "";
@@ -389,6 +409,7 @@ async function getFinalResult(data) {
  * Get last Bid details
  * @param {*} data
  */
+let lastBid = "";
 function getCurrentBid(data) {
   return new Promise(function (resolve, reject) {
     request.get(
@@ -401,18 +422,37 @@ function getCurrentBid(data) {
           let prevData = JSON.parse(body)[0] ? JSON.parse(body)[0] : {};
 
           console.log(
+            "check lastBid: ",
+            lastBid,
+            data.player_id == lastBid.player_id
+          );
+          if (
+            prevData == "" &&
+            lastBid != "" &&
+            data.player_id == lastBid.player_id
+          ) {
+            prevData = lastBid;
+            console.log("Set Last Bid as Prev");
+          }
+
+          console.log(
             "current bid: ",
             body,
             data.player_id == prevData.player_id,
             parseInt(data.current_price) <= parseInt(prevData.current_price)
           );
+
           if (
             data.player_id == prevData.player_id &&
             parseInt(data.current_price) <= parseInt(prevData.current_price)
           ) {
             console.log("Bid Fail", data.team_id);
+            lastBid = "";
             resolve(false);
           } else {
+            if (!JSON.parse(body)[0]) {
+              lastBid = data;
+            }
             resolve(true);
           }
         } else {
