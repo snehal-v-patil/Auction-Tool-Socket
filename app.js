@@ -19,7 +19,7 @@ var port = isProd ? 9009 : 8082;
 
 var server = http.Server(app);
 server.listen(port, function () {
-  console.log("Listening on http://localhost:" + port);
+  console.log("Listening on port:" + port);
 });
 
 app.use(function (req, res, next) {
@@ -64,10 +64,6 @@ io.on("connection", (socket) => {
     const user = userJoin(socket.id, username, room);
     socket.join(user.room);
     console.log("user join room :", user);
-    // Broadcast when a user connects
-    socket.broadcast
-      .to(user.room)
-      .emit("message", `${user.username} has joined the socket`);
   });
 
   // Runs when client disconnects
@@ -145,7 +141,7 @@ io.on("connection", (socket) => {
   /**Send Player reset */
   socket.on("sendPlayerReset", (data) => {
     const user = getCurrentUser(socket.id);
-    console.log("Player reset called");
+    console.log("Player reset called: ", data);
     if (user) {
       socket.broadcast.to(user.room).emit("playerreset", data);
     }
@@ -153,8 +149,8 @@ io.on("connection", (socket) => {
 
   /**Player Selected for Auction/Draft */
   socket.on("playerDrafted", (data) => {
+    console.log("Player Darfted send:");
     const user = getCurrentUser(socket.id);
-    console.log("Player Darfted called");
     var dataToUpdate = data;
     var playerId = dataToUpdate.player_id;
     var categoryId = dataToUpdate.category_id;
@@ -292,7 +288,6 @@ app.get("/ping", function (req, res) {
 /**Get Selected Player Data For Auction/Draft */
 function getPlayerData(player_id, category_id, map_id) {
   return new Promise(function (resolve, reject) {
-    console.log("Calling API");
     var data = {
       player_id: player_id,
       map_id: map_id,
@@ -310,7 +305,7 @@ function getPlayerData(player_id, category_id, map_id) {
           reject(error);
         }
         if (body) {
-          //console.log("res: ",body);
+          console.log("res: ", body);
           resolve(body);
         }
       }
@@ -371,13 +366,12 @@ function bidPlayer(req, res, data) {
   getFinalResult(data)
     .then((result) => {
       let status;
-      if (result == false) {
+      if (result.status == false) {
         status = 0;
-        msg = `Other team already bid for this amount.`;
+        msg = `${result.team} team already bid for this amount.`;
       } else {
         status = 1;
         msg = `Bid Succesfully.`;
-        //io.sockets.emit("playerBid", req.body);
       }
       res.send({
         status: status,
@@ -400,9 +394,14 @@ function bidPlayer(req, res, data) {
  */
 async function getFinalResult(data) {
   console.log("process for: ", data);
-  let response = await getCurrentBid(data);
-  let bidResponse = response ? await postBid(data) : response;
-  return bidResponse;
+  let response = await getCurrentBid(data).catch((error) => {
+    console.log(`getCurrentBid error : ${error}`);
+  });
+  return (bidResponse = response.status
+    ? await postBid(data).catch((error) => {
+        console.log(`postBid error : ${error}`);
+      })
+    : response);
 }
 
 /**
@@ -448,15 +447,15 @@ function getCurrentBid(data) {
           ) {
             console.log("Bid Fail", data.team_id);
             lastBid = "";
-            resolve(false);
+            resolve({ status: false, team: data.team_name });
           } else {
             if (!JSON.parse(body)[0]) {
               lastBid = data;
             }
-            resolve(true);
+            resolve({ status: true, team: data.team_name });
           }
         } else {
-          resolve(true);
+          resolve({ status: true, team: "" });
         }
       }
     );
@@ -486,11 +485,10 @@ function postBid(data) {
       },
       (error, res, body) => {
         if (error) {
-          console.error(error);
           reject(error);
         }
         if (body) {
-          resolve(true);
+          resolve({ status: true, team: data.team_name });
         }
       }
     );
