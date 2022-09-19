@@ -1,3 +1,4 @@
+const isDev = process.env.SI_NODE_ENV == 'dev' ? true : false;
 var fs = require("fs");
 var http = require("http");
 var socketio = require("socket.io");
@@ -14,8 +15,7 @@ const {
   getRoomUsers,
 } = require("./utils/users");
 var apiUrl = "http://auctions.sportz.io/";
-let isProd = false;
-var port = isProd ? 9009 : 8082;
+var port = !isDev ? 9009 : 8082;
 
 var server = http.Server(app);
 server.listen(port, function () {
