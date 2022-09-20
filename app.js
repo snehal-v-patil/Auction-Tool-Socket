@@ -179,6 +179,14 @@ io.on("connection", (socket) => {
       socket.broadcast.to(user.room).emit("SendPlayerpicked", data);
     }
   });
+
+  socket.on("teamActive",(data)=>{
+    const user = getCurrentUser(socket.id);
+    console.log("Pushing Team Active to socket");
+    if (user) {
+      socket.broadcast.to(user.room).emit("getTeamActive", data);
+    }
+  });
 });
 
 app.get("/ping", function (req, res) {
